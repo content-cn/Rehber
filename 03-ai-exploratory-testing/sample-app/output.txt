@@ -1,0 +1,67 @@
+BUG ID: B001
+SEVERITY: Critical
+TITLE: Rate limiter returns HTTP 200 on rejection — wrong rejection policy
+COMPONENT: Rate Limiter Middleware
+FLOW TRACE: Request → Logger → RateLimiter → BLOCKED but returns 200 instead of 429
+IMPACT: Automated clients, load balancers, and monitoring tools rely on 429 to implement
+backoff. Returning 200 means clients process the error body as a successful response.
+Upstream services will not know to slow down.
+FIX: middleware/rate_limiter.py — change status=200 to status=429. Add Retry-After header.
+REGRESSION NOTE: Any client parsing the JSON error body (instead of checking status codes)
+may need to be updated to handle 429. Verify upstream consumers.
+
+BUG ID: B002
+SEVERITY: Critical
+TITLE: Rate limiter only applies to GET — all write methods bypass
+COMPONENT: Rate Limiter Middleware
+FLOW TRACE: POST/PUT/DELETE → Logger → RateLimiter (SKIPPED) → Auth → View
+IMPACT: An attacker can send unlimited POST/PUT/DELETE requests — creating thousands of
+orders, updating data, or triggering expensive operations without any throttle.
+FIX: middleware/rate_limiter.py — remove the `if request.method != "GET"` check.
+Apply rate limiting to all methods, or use method-specific limits.
+REGRESSION NOTE: Existing batch import scripts may need rate limit exceptions.
+
+BUG ID: B003
+SEVERITY: Critical
+TITLE: Internal endpoints accept any API key — value not validated
+COMPONENT: Auth Middleware
+FLOW TRACE: Request → Logger → RateLimiter → Auth._check_api_key() → only checks existence → View
+IMPACT: Any request with a non-empty X-API-Key header can access internal endpoints
+including /api/internal/config which leaks secret key, debug mode, and database config.
+FIX: middleware/auth.py — add: if api_key != settings.INTERNAL_API_KEY: return 401
+REGRESSION NOTE: Ensure all internal service consumers use the correct key from settings.
+
+BUG ID: B004
+SEVERITY: High
+TITLE: RBAC uses OR logic instead of AND — partial permission bypass
+COMPONENT: Auth Middleware
+FLOW TRACE: Request → Logger → RateLimiter → Auth → _check_permissions() → set intersection (OR)
+IMPACT: Users with ANY one matching permission can access endpoints requiring ALL listed
+permissions. Bob with "read:products" can access /api/orders/create which requires
+["write:orders", "read:products"].
+FIX: middleware/auth.py — change `return bool(user_perms & required)` to
+`return required.issubset(user_perms)`
+REGRESSION NOTE: Users who previously had access may lose it. Audit current user permissions.
+
+...
+
+SUMMARY:
+- Total: 7 bugs
+- Critical: 3 (rate limiter status, rate limiter method bypass, API key not validated)
+- High: 2 (RBAC OR vs AND, IP spoofing)
+- Medium: 2 (path matching bypass, no token expiry)
+
+MIDDLEWARE HEALTH:
+- Request Logger: ✅ Clean
+- Rate Limiter: ❌ 3 issues (wrong status, method bypass, IP spoofing)
+- Auth: ❌ 4 issues (API key not validated, RBAC OR logic, path matching, no expiry)
+
+TOP 3 PRIORITY FIXES:
+1. B003 — Validate API key value (leaks secrets RIGHT NOW)
+2. B001+B002 — Fix rate limiter status + method coverage (DDoS vector)
+3. B004 — Fix RBAC to AND logic (privilege escalation)
+
+BACKWARDS COMPATIBILITY NOTES:
+- B001: Clients parsing error body instead of status codes will need updates
+- B002: Batch scripts may need rate limit exceptions
+- B004: Some users may lose access — audit permissions before deploying

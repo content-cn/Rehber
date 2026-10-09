@@ -1,0 +1,110 @@
+---
+SCENARIO: Rate limiter bypass via POST method
+CATEGORY: Rate Limiter Flaw
+FLOW TRACE: Request → RequestLogger → RateLimiter (SKIPPED — method is POST) → Auth → View
+TESTING: Whether non-GET methods bypass rate limiting entirely
+CURL:
+for i in $(seq 1 200); do
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8000/api/orders/create \
+    -H "Authorization: Bearer token-user-bob" \
+    -H "Content-Type: application/json" \
+    -d '{"product_id": 1, "quantity": 1}'
+done
+EXPECTED: After 100 requests, subsequent POSTs should be rate-limited (429)
+PREDICTED ISSUE: The rate limiter only checks GET requests (if request.method != "GET": return).
+All POST/PUT/DELETE requests bypass rate limiting entirely — an attacker can flood write endpoints.
+---
+
+---
+SCENARIO: Internal endpoint accepts any API key value
+CATEGORY: Auth Bypass
+FLOW TRACE: Request → RequestLogger → RateLimiter → Auth._check_api_key() → View
+TESTING: Whether internal endpoints validate the actual API key or just check for presence
+CURL:
+curl -s http://localhost:8000/api/internal/config \
+  -H "X-API-Key: literally-any-string"
+EXPECTED: 401 Unauthorized — the key "literally-any-string" is not a valid API key
+PREDICTED ISSUE: _check_api_key() only checks `if not api_key` — it verifies the header
+EXISTS but never compares against settings.INTERNAL_API_KEY. Any non-empty string passes.
+---
+
+---
+SCENARIO: RBAC bypass with partial permissions
+CATEGORY: RBAC Flaw
+FLOW TRACE: Request → RequestLogger → RateLimiter → Auth._check_bearer_token() → _check_permissions() → View
+TESTING: Whether a user with only ONE of the required permissions can access a restricted endpoint
+CURL:
+curl -s http://localhost:8000/api/admin/users \
+  -H "Authorization: Bearer token-user-alice"
+EXPECTED: 403 Forbidden — alice has "read:products" and "read:orders" but NOT "read:users" or "admin:export"
+PREDICTED ISSUE: _check_permissions() uses set intersection (OR logic) instead of subset (AND logic).
+Required: ["read:users", "admin:export"]. Alice has "read:orders" — but if there's ANY overlap
+between alice's permissions and the required set, she passes. Check if alice's permissions
+intersect with {"read:users", "admin:export"} — they don't, so this specific test may pass.
+BUT: bob with ["read:products", "write:products", "read:orders"] trying /api/orders/create
+(requires ["write:orders", "read:products"]) — bob has "read:products" which intersects,
+so bob would pass even though he lacks "write:orders".
+---
+
+---
+SCENARIO: Path matching bypass — auth skip via URL manipulation
+CATEGORY: Auth Bypass
+FLOW TRACE: Request → RequestLogger → RateLimiter → Auth (PUBLIC_PATHS startswith check) → View
+TESTING: Whether adding a suffix to a public path bypasses auth for non-public endpoints
+CURL:
+curl -s http://localhost:8000/api/products-admin/secret
+EXPECTED: 404 or 401 — this path doesn't exist and shouldn't bypass auth
+PREDICTED ISSUE: PUBLIC_PATHS uses `path.startswith("/api/products")` — the path
+"/api/products-admin/secret" starts with "/api/products" so it matches as public
+and SKIPS auth entirely. Even though it doesn't map to a valid URL, the auth bypass
+pattern itself is dangerous.
+---
+
+---
+SCENARIO: Rate limiter returns 200 on limit exceeded
+CATEGORY: Rate Limiter Flaw
+FLOW TRACE: Request → RequestLogger → RateLimiter (limit exceeded) → STOP (returns response)
+TESTING: What HTTP status code the rate limiter returns when blocking a request
+CURL:
+# First, exhaust the rate limit
+for i in $(seq 1 101); do
+  curl -s -o /dev/null http://localhost:8000/api/products
+done
+# Then check the response
+curl -s -w "\nHTTP_STATUS: %{http_code}\n" http://localhost:8000/api/products
+EXPECTED: 429 Too Many Requests
+PREDICTED ISSUE: The rate limiter returns JsonResponse(..., status=200).
+Clients checking HTTP status codes will think rate-limited requests SUCCEEDED.
+This is a wrong rejection policy — automated clients and load balancers
+depend on 429 to implement backoff.
+---
+
+---
+SCENARIO: IP spoofing to bypass rate limiter
+CATEGORY: Security
+FLOW TRACE: Request → RequestLogger → RateLimiter._get_client_ip() → rate check
+TESTING: Whether an attacker can bypass rate limiting by rotating X-Forwarded-For headers
+CURL:
+for i in $(seq 1 200); do
+  curl -s -o /dev/null http://localhost:8000/api/products \
+    -H "X-Forwarded-For: 10.0.0.$((i % 255))"
+done
+echo "All 200 requests should have been rate-limited but weren't"
+EXPECTED: Rate limiting should use the real client IP, not a client-provided header
+PREDICTED ISSUE: _get_client_ip() trusts X-Forwarded-For blindly without validation.
+An attacker can rotate fake IPs in the header to get a fresh rate limit window per request.
+---
+
+---
+SCENARIO: Internal config endpoint exposes secrets
+CATEGORY: Security
+FLOW TRACE: Request → Logger → RateLimiter → Auth._check_api_key() (accepts any key) → internal_config view
+TESTING: Whether sensitive config data is exposed through the internal endpoint
+CURL:
+curl -s http://localhost:8000/api/internal/config \
+  -H "X-API-Key: anything" | python -m json.tool
+EXPECTED: This endpoint should be strictly protected — it returns config including secret key preview
+PREDICTED ISSUE: Combined with the API key bypass (any key accepted), this endpoint
+leaks internal configuration: debug mode, database engine, rate limit settings,
+and a preview of the SECRET_KEY. Authentication + information disclosure compound.
+---
