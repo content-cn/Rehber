@@ -1,0 +1,21 @@
+=== Test: Rate limiter wrong status code ===
+RESPONSE STATUS: 200
+RESPONSE BODY: {"error": "Rate limit exceeded. Try again later."}
+
+=== Test: POST bypasses rate limiter ===
+Observed result: repeated POST requests continue returning 201 with no throttling
+
+=== Test: Internal endpoint accepts any API key ===
+Observed result: 200 OK and internal config is returned for an invalid API key
+
+=== Test: RBAC OR vs AND ===
+Observed result: Bob can create orders despite lacking `write:orders`
+
+=== Test: Path matching bypass ===
+Observed result: request lands on 404 instead of 401, showing auth was skipped
+
+=== Test: IP spoofing bypass ===
+Observed result: rotating `X-Forwarded-For` keeps every request at 200
+
+=== Test: No token expiry validation ===
+Observed result: long-lived bearer token continues to work with no expiry check

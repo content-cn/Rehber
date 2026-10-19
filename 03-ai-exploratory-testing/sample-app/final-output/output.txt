@@ -1,0 +1,27 @@
+BUG ID: B001
+SEVERITY: Critical
+TITLE: Rate limiter returns HTTP 200 on rejection — wrong rejection policy
+
+BUG ID: B002
+SEVERITY: Critical
+TITLE: Rate limiter only applies to GET — all write methods bypass
+
+BUG ID: B003
+SEVERITY: Critical
+TITLE: Internal endpoints accept any API key — value not validated
+
+BUG ID: B004
+SEVERITY: High
+TITLE: RBAC uses OR logic instead of AND — partial permission bypass
+
+BUG ID: B005
+SEVERITY: High
+TITLE: X-Forwarded-For trust enables IP spoofing bypass
+
+BUG ID: B006
+SEVERITY: Medium
+TITLE: Public path matching is too broad
+
+BUG ID: B007
+SEVERITY: Medium
+TITLE: Bearer tokens have no expiry or revocation check

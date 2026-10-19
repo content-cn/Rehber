@@ -1,0 +1,20 @@
+---
+SCENARIO: Rate limiter bypass via POST method
+CATEGORY: Rate Limiter Flaw
+FLOW TRACE: Request → RequestLogger → RateLimiter (SKIPPED — method is POST) → Auth → View
+TESTING: Whether non-GET methods bypass rate limiting entirely
+EXPECTED: After 100 requests, subsequent POSTs should be rate-limited (429)
+
+---
+SCENARIO: Internal endpoint accepts any API key value
+CATEGORY: Auth Bypass
+FLOW TRACE: Request → RequestLogger → RateLimiter → Auth._check_api_key() → View
+TESTING: Whether internal endpoints validate the actual API key or just check for presence
+EXPECTED: 401 Unauthorized for invalid API keys
+
+---
+SCENARIO: RBAC bypass with partial permissions
+CATEGORY: RBAC Flaw
+FLOW TRACE: Request → RequestLogger → RateLimiter → Auth._check_bearer_token() → _check_permissions() → View
+TESTING: Whether a user with only one matching permission can access a restricted endpoint
+EXPECTED: 403 Forbidden when all required permissions are not present
